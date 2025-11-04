@@ -13,6 +13,7 @@ import logging
 import requests
 from urllib.parse import urlparse
 from werkzeug.serving import WSGIRequestHandler
+import dns.resolver
 
 # Get the directory where this script is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -125,6 +126,23 @@ def extract_registrar_url_from_whois_text(whois_text):
                         url = f"https://{url}"
                     return url
     return None
+
+def check_mx_is_hostinger(domain):
+    """Check if domain's MX records point to Hostinger."""
+    try:
+        # Query MX records for the domain
+        mx_records = dns.resolver.resolve(domain, 'MX')
+        
+        # Check if any MX record contains 'hostinger'
+        for mx in mx_records:
+            mx_host = str(mx.exchange).lower()
+            if 'hostinger' in mx_host:
+                return True
+        return False
+    except Exception as e:
+        # If MX lookup fails, return False (not Hostinger)
+        logging.debug(f"MX lookup failed for {domain}: {str(e)}")
+        return False
 
 @app.route('/api/whois', methods=['GET'])
 def get_whois_info():
@@ -254,53 +272,59 @@ def get_favicon():
     # Remove protocol and www if present
     domain = original_domain.replace('http://', '').replace('https://', '').replace('www.', '')
     
-    # If requesting registrar favicon, look it up via WHOIS
+    # If requesting registrar favicon, check MX first, then look it up via WHOIS
     if get_registrar:
-        try:
-            # Get registrar website using the existing WHOIS logic
-            w = whois.whois(domain)
-            
-            # Extract registrar URL
-            registrar_url = None
-            if hasattr(w, 'text') and w.text:
-                registrar_url = extract_registrar_url_from_whois_text(w.text)
-            
-            # If no URL found, try to get registrar name
-            registrar = None
-            if hasattr(w, 'registrar') and w.registrar:
-                registrar = str(w.registrar).strip()
-            elif hasattr(w, 'registrar_name') and w.registrar_name:
-                registrar = str(w.registrar_name).strip()
-            
-            # Check if Hostinger
-            if registrar and 'hostinger' in registrar.lower():
-                domain = 'hostinger.com'
-            elif registrar_url:
-                # Extract domain from registrar URL
-                try:
-                    if registrar_url.startswith('http://') or registrar_url.startswith('https://'):
-                        parsed = urlparse(registrar_url)
-                        domain = parsed.hostname or domain
-                    elif '.' in registrar_url:
-                        domain = registrar_url.replace('www.', '').strip()
-                    else:
-                        # Construct domain from registrar name
-                        registrar_name_clean = (registrar or registrar_url).lower() \
-                            .replace(' ', '') \
-                            .replace('.', '') \
-                            .replace('inc.', '') \
-                            .replace('llc.', '') \
-                            .replace('ltd.', '') \
-                            .replace('corp.', '') \
-                            .replace('corporation', '') \
-                            .replace(',', '')
-                        domain = f"{registrar_name_clean}.com"
-                except:
-                    # If parsing fails, use original domain
-                    pass
-        except:
-            # If WHOIS lookup fails, use original domain
-            pass
+        # First check if MX is Hostinger
+        if check_mx_is_hostinger(domain):
+            # MX is Hostinger, return Hostinger image
+            domain = 'hostinger.com'
+        else:
+            # MX is not Hostinger, get registrar info
+            try:
+                # Get registrar website using the existing WHOIS logic
+                w = whois.whois(domain)
+                
+                # Extract registrar URL
+                registrar_url = None
+                if hasattr(w, 'text') and w.text:
+                    registrar_url = extract_registrar_url_from_whois_text(w.text)
+                
+                # If no URL found, try to get registrar name
+                registrar = None
+                if hasattr(w, 'registrar') and w.registrar:
+                    registrar = str(w.registrar).strip()
+                elif hasattr(w, 'registrar_name') and w.registrar_name:
+                    registrar = str(w.registrar_name).strip()
+                
+                # Check if Hostinger (backup check in case MX check failed)
+                if registrar and 'hostinger' in registrar.lower():
+                    domain = 'hostinger.com'
+                elif registrar_url:
+                    # Extract domain from registrar URL
+                    try:
+                        if registrar_url.startswith('http://') or registrar_url.startswith('https://'):
+                            parsed = urlparse(registrar_url)
+                            domain = parsed.hostname or domain
+                        elif '.' in registrar_url:
+                            domain = registrar_url.replace('www.', '').strip()
+                        else:
+                            # Construct domain from registrar name
+                            registrar_name_clean = (registrar or registrar_url).lower() \
+                                .replace(' ', '') \
+                                .replace('.', '') \
+                                .replace('inc.', '') \
+                                .replace('llc.', '') \
+                                .replace('ltd.', '') \
+                                .replace('corp.', '') \
+                                .replace('corporation', '') \
+                                .replace(',', '')
+                            domain = f"{registrar_name_clean}.com"
+                    except:
+                        # If parsing fails, use original domain
+                        pass
+            except:
+                # If WHOIS lookup fails, use original domain
+                pass
     
     # Validate size parameter
     valid_sizes = ['16', '32', '48', '64', '128', '256']
